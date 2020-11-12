@@ -8,6 +8,9 @@ import face_alignment
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 DYLD_PRINT_LIBRARIES=1
+from visdom import Visdom
+vis = Visdom(server='http://10.92.173.176', port=9999,env='yugt_fakesmile_video')
+assert vis.check_connection()
 import numpy as np
 import time
 from tqdm import tqdm
@@ -15,6 +18,9 @@ from math import *
 from models import *
 import pickle
 import cv2
+print('path =', os.getcwd())
+
+os.chdir(os.getcwd())
 
 img_glo = None
 
@@ -25,6 +31,8 @@ img_glo = None
 #### 还原
 # 整个图像纺射变换
 # 贴回原图
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 i = 0
 cnt = 0
@@ -360,10 +368,10 @@ def video2ph(file_path, save_path, init_path, args):
     while success:
         i = i + 1
 
-        if (i % timeF == 0 ):
+        if (i % timeF == 0 and i<10):
             frame = rotate_bound2(frame, 270)
             frame_ = frame.copy()
-            # cv2.imshow('frame_', frame_)
+            # cv2.imshow('frame_', frame)
             # cv2.waitKey()
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             # 处理图像，返回人脸align_crop图像和mask
@@ -403,9 +411,9 @@ def video2ph(file_path, save_path, init_path, args):
     dict['warp_shape'] = warp_shape
     dict['cart_list'] = cart_list
     dict['rgba_list'] = rgba_list
-    dict['cnt'] = cnt
+    dict['cnt'] = i
 
-    with open('/Users/momo/Yugangtian/dict.pkl', "wb") as fp:
+    with open('./dict.pkl', "wb") as fp:
         pickle.dump(dict, fp)
 
 def model_process(args, read_path, TmpPicSavePath):
@@ -417,7 +425,7 @@ def model_process(args, read_path, TmpPicSavePath):
 
 
 
-    dict_file = open('/Users/momo/Yugangtian/dict.pkl', 'rb')
+    dict_file = open('./dict.pkl', 'rb')
     dict = pickle.load(dict_file)
     crop_list = dict['crop_list']
     m_list = dict['m_list']
@@ -427,7 +435,7 @@ def model_process(args, read_path, TmpPicSavePath):
     max_cnt = dict['cnt']
 
     global i
-    tmp = tqdm(range(1046, max_cnt))
+    tmp = tqdm(range(max_cnt))
     for cnt in tmp:
         i = i + 1
         tmp.set_description("model processing: %i" % i)
@@ -448,7 +456,7 @@ def model_process(args, read_path, TmpPicSavePath):
 
 
             face = np.transpose(face[np.newaxis, :, :, :], (0, 3, 1, 2)).astype(np.float32)
-            face = torch.from_numpy(face)
+            face = torch.from_numpy(face).to(device)
             # print(face.shape)
             with torch.no_grad():
                 cartoon, heatmap = net(face)[0][0], net(face)[2][0]
@@ -480,6 +488,7 @@ def model_process(args, read_path, TmpPicSavePath):
             img_ = cv2.warpAffine(img_, M, (img.shape[1], img.shape[0]), borderValue=(0, 0, 0))
             cv2.imwrite(TmpPicSavePath+args.f_name.split('.')[0][-4:] + "_"+args.mode+str(i)+".jpg", img_)
             # print(TmpPicSavePath+args.f_name.split('.')[0][-4:] + "_"+args.mode+str(i)+".jpg")
+
         except:
             print("frame %d error."%i)
             pass
@@ -487,11 +496,11 @@ def model_process(args, read_path, TmpPicSavePath):
 
 
 def ph2video(video_savepath, photo_path):
-    dict_file = open('/Users/momo/Yugangtian/dict.pkl', 'rb')
+    dict_file = open('./dict.pkl', 'rb')
     dict = pickle.load(dict_file)
     max_cnt = dict['cnt']
     videoWriter = cv2.VideoWriter(video_savepath, cv2.VideoWriter_fourcc(*'MJPG'), 25, (2160,1920))
-    tmp = tqdm(range(1, max_cnt + 1))
+    tmp = tqdm(range(1, max_cnt+1))
     for i in tmp:
         # 加载图片，图片更多可以改变上面的10
         tmp.set_description("Video gen: %i" % i)
@@ -500,8 +509,13 @@ def ph2video(video_savepath, photo_path):
 
             img_l = cv2.imread(photo_path+args.f_name.split('.')[0][-4:]+ "_init"+str(i)+".jpg")
             img = cv2.imread(photo_path+args.f_name.split('.')[0][-4:] + "_"+args.mode+str(i)+".jpg")
+            img_ = img.copy()
+            # cv2.imshow('img', img_)
+            # cv2.waitKey()
             img = np.concatenate((img_l, img), 1)
-
+            # img_ = cv2.cvtColor(img_, cv2.COLOR_BGR2RGB)
+            # vis.image(img_.transpose((2,0,1)), win='show-1')
+            # time.sleep(5)
         except:
             print('Lack frame. pass...')
             continue
@@ -518,29 +532,41 @@ def ph2video(video_savepath, photo_path):
 if __name__ == '__main__':
 
     import argparse
-    # 必须参数mode、 w、 f_nam。使用的测试视频默认存在file_path
+    # 必须参数w、 f_nam。使用的测试视频默认存在file_path
     parser = argparse.ArgumentParser()
-    parser.add_argument('--f_name', type=str, default='IMG_5429.MOV')
-    parser.add_argument('--src', type=str, default='/Users/momo/Yugangtian/test_video_phone/')
-    parser.add_argument('--w', type=str, default='/Users/momo/Yugangtian/CycleGan_FakeSmile/photo2cartoon/models/_crop/photo2cartoon_crop_params_0310000.pt')
-    parser.add_argument('--mode', type=str, default='crop')
+    parser.add_argument('--f_name', type=str, default='./pre_video/IMG_5429.MOV')
+    parser.add_argument('--w', type=str, default='./models/_crop/photo2cartoon_crop_params_0435000.pt')
+    # parser.add_argument('--mode', type=str, default='crop')
     # 测试用参数
     parser.add_argument('--frame_start', type=int, default=0)
-
     args = parser.parse_args()
 
-    yuantu_path = '/Users/momo/Yugangtian/test_video_ph/'
-    file_path = '/Users/momo/Downloads/fakesmile_video/pre_video/'+args.f_name
-    file_savepath = '/Users/momo/Downloads/fakesmile_video/post_video/'+args.f_name.split('.')[0]+args.mode+'_'+args.w.split('.')[0][-7:]+'.'+args.f_name.split('.')[-1]
-    face_savepath = '/Users/momo/Yugangtian/face_detected/'
-    TmpPicSavePath = '/Users/momo/Yugangtian/face2pic/'
 
-    # video2ph(file_path, face_savepath, init_path=TmpPicSavePath, args=args)
+    args.mode = args.w.split('/')[-1][14:18]
+    file_path = args.f_name
+    # 视频存储位置
+    # file_savepath = './post_video/'+args.f_name.split('/')[-1].split('.')[0]+args.mode+'_'+args.w.split('.')[0][-7:]+'.'+args.f_name.split('.')[-1]
+    file_savepath = './post_video/'+args.f_name.split('/')[-1].split('.')[0]+args.mode+'_'+args.w.split('.')[0][-7:]+'.avi'
+
+    if not os.path.exists( './post_video/'):
+        os.mkdir( './post_video/')
+
+    # crop的人脸与对应mask
+    face_savepath = './face_detected/'
+    if not os.path.exists(face_savepath):
+        os.mkdir(face_savepath)
+    # 原图与完成的假笑图
+    TmpPicSavePath = './face2pic/'
+    if not os.path.exists(TmpPicSavePath):
+        os.mkdir(TmpPicSavePath)
+
+    video2ph(file_path, face_savepath, init_path=TmpPicSavePath, args=args)
     i = 0
     model_process(args, read_path=face_savepath, TmpPicSavePath=TmpPicSavePath)
 
     ph2video(video_savepath=file_savepath, photo_path=TmpPicSavePath)
 
+    vis.video(videofile= file_savepath, win=file_savepath)
 
 
 
